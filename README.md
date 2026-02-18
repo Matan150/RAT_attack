@@ -3,7 +3,7 @@ A multi-component Python-based system designed to demonstrate automated payload 
 
 🚀 Features
 
--Asynchronous C2 Server: A multi-threaded server capable of managing multiple client connections and issuing remote commands simultaneously. 
+-Asynchronous C2 Server: A multi-threaded server capable of managing multiple client connections and issuing remote commands simultaneously.
 -Persistent Reverse Shell: A client-side agent with built-in reconnection logic to maintain access across network fluctuations.
 -Automated File Bundling (Dropper): A packer script that uses Base64 encoding to embed any file (PDF, Image, etc.) into a Python script and compiles it into a "stealth" .exe using PyInstaller. 
 -Remote File Management: Full support for remote file uploads and downloads between the server and the target client. 
